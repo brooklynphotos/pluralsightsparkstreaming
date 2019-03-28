@@ -4,7 +4,7 @@ import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.{Encoders, SaveMode, SparkSession}
 import org.apache.spark.streaming.dstream.ReceiverInputDStream
 import org.apache.spark.streaming.kafka.KafkaUtils
-import org.apache.spark.streaming.{Seconds, StreamingContext}
+import org.apache.spark.streaming.{Seconds, State, StateSpec, StreamingContext}
 
 import scala.util.Try
 
@@ -36,7 +36,18 @@ object StatefulDetection {
     streamingContext.awaitTermination()
   }
 
-  def transform(value: ReceiverInputDStream[(String, String)]): ReceiverInputDStream[_]= ???
+  def transform(kafkaStream: ReceiverInputDStream[(String, String)]): ReceiverInputDStream[_]= {
+    kafkaStream.map(keyVal => tryConversionToSimpleTransaction(keyVal._2))
+      .flatMap(_.right.toOption)
+      .map(simpleTx => (simpleTx.account_number, simpleTx))
+      .mapValues(tx => List(tx))
+      // window and slide duration
+      .reduceByKeyAndWindow((txs, otherTxs) => txs ++ otherTxs, (txs, oldTxs) => txs diff oldTxs, Seconds(10), Seconds(10))
+      .mapWithState(
+        StateSpec.function((accNum: String, newTxsOpt: Option[List[SimpleTransaction]], aggData: State[AggregateData]) => {
+
+        }))
+  }
 
 
   def tryConversionToSimpleTransaction(logLine: String): Either[UnparsableTransaction, SimpleTransaction] = {
