@@ -30,11 +30,11 @@ object KafkaTransactionProducer{
     val randomize = args.lift(2).map(_.toLowerCase).getOrElse("no") == "yes"
     var currentStep = 0
     while(System.in.available == 0 || (!randomize && currentStep <= 100)){
-      val delayUntilNextSend = if(randomize) scala.util.Random.nextInt(5000) else ((currentStep + 1) * 50) //Up to 5 seconds
+      val delayUntilNextSend = if(randomize) scala.util.Random.nextInt(5000) else (currentStep + 1) * 50 //Up to 5 seconds
       Thread.sleep(delayUntilNextSend)
       val accountNumber = if(randomize) accountNumbers(scala.util.Random.nextInt(accountNumbers.size)) else accountNumbers(currentStep % accountNumbers.size)
       val description = if(randomize) descriptions(scala.util.Random.nextInt(descriptions.size)) else descriptions(currentStep % descriptions.size)
-      val currentDate = (new java.text.SimpleDateFormat("MM/dd/yyyy")).format(new java.util.Date())
+      val currentDate = new java.text.SimpleDateFormat("MM/dd/yyyy").format(new java.util.Date())
       val txAmount = if(randomize) math.floor((scala.util.Random.nextInt(5000) + scala.util.Random.nextDouble) * 100) / 100 else transactionAmounts(currentStep % transactionAmounts.size)
       val transactionLogLine = s"$currentStep,$currentDate,$accountNumber,$txAmount,$description"
       producer.send(new ProducerRecord(topic, transactionLogLine))
