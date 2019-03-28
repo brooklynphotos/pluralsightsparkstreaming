@@ -1,8 +1,9 @@
 package photos.brooklyn.pluralsight.spark
 
+import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.{Encoders, SaveMode, SparkSession}
-import org.apache.spark.streaming.dstream.ReceiverInputDStream
+import org.apache.spark.streaming.dstream.{DStream, ReceiverInputDStream}
 import org.apache.spark.streaming.kafka.KafkaUtils
 import org.apache.spark.streaming.{Seconds, State, StateSpec, StreamingContext}
 
@@ -36,7 +37,7 @@ object StatefulDetection {
     streamingContext.awaitTermination()
   }
 
-  def transform(kafkaStream: ReceiverInputDStream[(String, String)]): ReceiverInputDStream[_]= {
+  def transform(kafkaStream: ReceiverInputDStream[(String, String)]): DStream[(String, (AggregateData, Double))]= {
     kafkaStream.map(keyVal => tryConversionToSimpleTransaction(keyVal._2))
       .flatMap(_.right.toOption)
       .map(simpleTx => (simpleTx.account_number, simpleTx))
@@ -45,8 +46,40 @@ object StatefulDetection {
       .reduceByKeyAndWindow((txs, otherTxs) => txs ++ otherTxs, (txs, oldTxs) => txs diff oldTxs, Seconds(10), Seconds(10))
       .mapWithState(
         StateSpec.function((accNum: String, newTxsOpt: Option[List[SimpleTransaction]], aggData: State[AggregateData]) => {
-
+          val newTxs = newTxsOpt.getOrElse(List.empty[SimpleTransaction])
+          val calculatedAggTuple = newTxs.foldLeft((0.0,0))((currAgg, tx)=>(currAgg._1 + tx.amount, currAgg._2 + 1))
+          val calculatedAgg = AggregateData(calculatedAggTuple._1, calculatedAggTuple._2,
+            if(calculatedAggTuple._2 > 0) calculatedAggTuple._1/calculatedAggTuple._2 else 0)
+          val oldAggDataOption = aggData.getOption
+          aggData.update(
+            oldAggDataOption match {
+              case Some(aggData) =>
+                AggregateData(aggData.totalSpending + calculatedAgg.totalSpending,
+                  aggData.numTx + calculatedAgg.numTx, calculatedAgg.windowSpendingAvg)
+              case None => calculatedAgg
+            }
+          )
+          // actual part that checks for possible fraud
+          newTxs.map(tx => EvaluatedSimpleTransaction(tx, tx.amount > 4000))
         }))
+      .stateSnapshots
+      .transform(dStreamRDD =>{
+        val sc = dStreamRDD.sparkContext
+        val historicAggsOption = sc.getPersistentRDDs
+          .values.filter(_.name == "storedHistoric").headOption
+        val historicAggs = historicAggsOption match {
+          case Some(persistedHistoricAggs) =>
+            persistedHistoricAggs.asInstanceOf[org.apache.spark.rdd.RDD[(String, Double)]]
+          case None => {
+            // really it should just get data back from json
+            RDD[(String, Double)]
+          }
+        }
+        dStreamRDD.join(historicAggs)
+      })
+      .filter{ case (acctNum, (aggData, historicAvg)) =>
+        aggData.averageTx - historicAvg > 2000 || aggData.windowSpendingAvg - historicAvg > 2000
+      }
   }
 
 
@@ -120,6 +153,8 @@ object StatefulDetection {
 
   }
 }
+
+case class EvaluatedSimpleTransaction(tx: SimpleTransaction, isPossibleFraud: Boolean)
 
 case class TransactionForAverage(accountNumber: String, amount: Double, description: String, date: java.sql.Date)
 
