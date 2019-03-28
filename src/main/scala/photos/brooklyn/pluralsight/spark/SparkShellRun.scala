@@ -1,10 +1,11 @@
 package photos.brooklyn.pluralsight.spark
 
 import org.apache.spark.SparkContext
-import org.apache.spark.streaming.{Seconds, StreamingContext}
+import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.streaming.Trigger
+import org.apache.spark.streaming.{Seconds, StreamingContext, _}
 
 import scala.collection.mutable
-import org.apache.spark.streaming._
 
 object SparkShellRun {
   val sc: SparkContext = SparkContext.getOrCreate()
@@ -66,5 +67,37 @@ object SparkShellRun {
 //    testStream.countByValue().print this will show also the batch id
     testStream.count().print
     ssc.start
+  }
+
+  def structuredWindowedStreaming(spark: SparkSession): Unit = {
+    import org.apache.spark.sql.functions.window
+    import spark.implicits._
+
+    val socketDS = spark.readStream.format("socket")
+      .option("host", "localhost")
+      .option("port", "9999")
+      .option("includeTimestamp", true) // includes timestamp in the output
+      .load
+    val windowedCount = socketDS
+      .withWatermark("timestamp", "10 seconds")
+      .groupBy(window($"timestamp", "5 seconds"), $"value")
+      .count
+    val query = windowedCount
+      .writeStream.format("console")
+      .option("truncate", false)
+      .trigger(Trigger.ProcessingTime("5 seconds"))
+      // append because we are using watermark
+      .outputMode("append").start
+  }
+
+  def structuredStreaming(spark: SparkSession): Unit = {
+    val socketDS = spark.readStream.format("socket")
+      .option("host", "localhost")
+      .option("port", "9999")
+      .load
+    val socketCount = socketDS.groupBy().count
+    // complete because we just want the aggregation
+    val query = socketCount.writeStream.format("console").outputMode("complete").start
+
   }
 }
